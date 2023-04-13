@@ -1,0 +1,264 @@
+
+
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+
+#define L1A 22
+#define L1B 24
+#define L2A 27
+#define L2B 29
+#define L3A 30
+#define L3B 32
+#define L4A 34
+#define L4B 36
+#define L5A 38
+#define L5B 40
+#define L6A 42
+#define L6B 44
+
+#define L1E 12
+#define L2E 6
+#define L3E 10
+#define L4E 9
+#define L5E 8
+#define L6E 7
+
+#define E_STOP 18
+
+#define RAISE_ALL 45
+#define LOWER_ALL 47
+#define AUTOMATIC 48
+#define CALIBRATION 49
+
+
+#define INIT_SPEED 255
+#define LEVEL_SPEED 255
+
+Adafruit_MPU6050 mpu;
+
+
+int automaticOp = 0;
+
+void eStopRoutine() {
+
+  eStopPlatform();
+}
+
+void setup() {
+  pinSet();
+  //attachInterrupt(digitalPinToInterrupt(E_STOP), eStopRoutine, FALLING);
+  Serial.begin(115200);
+  mpu.begin();
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+
+  calibratePlatform();
+}
+
+void loop() {
+  automaticOp = digitalRead(AUTOMATIC);
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  if (automaticOp == 0) {
+    Serial.print("Acceleration (m/s^2): ");
+    Serial.print(a.acceleration.x);
+    Serial.print(", ");
+    Serial.print(a.acceleration.y);
+    Serial.print(", ");
+    Serial.print(a.acceleration.z);
+    Serial.println();
+  }
+
+
+
+  bool x_free = false;
+  bool y_free = false;
+
+  if (a.acceleration.x > 0.5 && automaticOp == 0) {
+    tiltPlatformXNegetive();
+  } else if (a.acceleration.x < -0.5 && automaticOp == 0) {
+    tiltPlatformXPositive();
+  } else if (automaticOp == 0) {
+    x_free = true;
+  }
+
+  if (a.acceleration.y > 0.5 && automaticOp == 0) {
+    tiltPlatformYNegetive();
+  } else if (a.acceleration.y < -0.5 && automaticOp == 0) {
+    tiltPlatformYPositive();
+  } else if (automaticOp == 0) {
+    y_free = true;
+  }
+
+  if (x_free && y_free && automaticOp == 0) {
+    eStopPlatform();
+  }
+
+  if (digitalRead(RAISE_ALL) == 0 && automaticOp == 1) {
+    raisePlatform();
+  } else if (digitalRead(LOWER_ALL) == 0 && automaticOp == 1) {
+    lowerPlatform();
+  } else {
+    stopPlatform();
+  }
+}
+
+void pinSet() {
+  pinMode(L1A, OUTPUT);
+  pinMode(L1B, OUTPUT);
+  pinMode(L2A, OUTPUT);
+  pinMode(L2B, OUTPUT);
+  pinMode(L3A, OUTPUT);
+  pinMode(L3B, OUTPUT);
+  pinMode(L4A, OUTPUT);
+  pinMode(L4B, OUTPUT);
+  pinMode(L5A, OUTPUT);
+  pinMode(L5B, OUTPUT);
+  pinMode(L6A, OUTPUT);
+  pinMode(L6B, OUTPUT);
+
+  pinMode(L1E, OUTPUT);
+  pinMode(L2E, OUTPUT);
+  pinMode(L3E, OUTPUT);
+  pinMode(L4E, OUTPUT);
+  pinMode(L5E, OUTPUT);
+  pinMode(L6E, OUTPUT);
+
+  pinMode(E_STOP, INPUT_PULLUP);
+  pinMode(RAISE_ALL, INPUT_PULLUP);
+  pinMode(LOWER_ALL, INPUT_PULLUP);
+  pinMode(AUTOMATIC, INPUT_PULLUP);
+  pinMode(CALIBRATION, INPUT_PULLUP);
+}
+
+void extend(int pinA, int pinB, int pinE, int duty) {
+  digitalWrite(pinA, HIGH);
+  digitalWrite(pinB, LOW);
+  analogWrite(pinE, duty);
+}
+
+void retract(int pinA, int pinB, int pinE, int duty) {
+  digitalWrite(pinA, LOW);
+  digitalWrite(pinB, HIGH);
+  analogWrite(pinE, duty);
+}
+void halt(int pinA, int pinB) {
+  digitalWrite(pinA, LOW);
+  digitalWrite(pinB, LOW);
+}
+
+void calibratePlatform() {
+  Serial.println(F("Calibrating Platform - Retracting"));
+  retract(L1A, L1B, L1E, INIT_SPEED);
+  retract(L2A, L2B, L2E, INIT_SPEED);
+  retract(L3A, L3B, L3E, INIT_SPEED);
+  retract(L4A, L4B, L4E, INIT_SPEED);
+  retract(L5A, L5B, L5E, INIT_SPEED);
+  retract(L6A, L6B, L6E, INIT_SPEED);
+
+  while (digitalRead(CALIBRATION) == HIGH);
+  delay(1000);
+
+  Serial.println("Calibration OK");
+
+  extend(L1A, L1B, L1E, INIT_SPEED);
+  extend(L2A, L2B, L2E, INIT_SPEED);
+  extend(L3A, L3B, L3E, INIT_SPEED);
+  extend(L4A, L4B, L4E, INIT_SPEED);
+  extend(L5A, L5B, L5E, INIT_SPEED);
+  extend(L6A, L6B, L6E, INIT_SPEED);
+
+  delay(8000);
+
+}
+
+void stopPlatform() {
+  halt(L1A, L1B);
+  halt(L2A, L2B);
+  halt(L3A, L3B);
+  halt(L4A, L4B);
+  halt(L5A, L5B);
+  halt(L6A, L6B);
+  Serial.println(F("Stoppping Platform - HALT"));
+}
+
+void eStopPlatform() {
+  halt(L1A, L1B);
+  halt(L2A, L2B);
+  halt(L3A, L3B);
+  halt(L4A, L4B);
+  halt(L5A, L5B);
+  halt(L6A, L6B);
+}
+
+void raisePlatform() {
+  Serial.println(F("Raising Platform - LEVEL"));
+  extend(L1A, L1B, L1E, LEVEL_SPEED);
+  extend(L2A, L2B, L2E, LEVEL_SPEED);
+  extend(L3A, L3B, L3E, LEVEL_SPEED);
+  extend(L4A, L4B, L4E, LEVEL_SPEED);
+  extend(L5A, L5B, L5E, LEVEL_SPEED);
+  extend(L6A, L6B, L6E, LEVEL_SPEED);
+}
+void lowerPlatform() {
+  Serial.println(F("LOWERING platform - LEVEL"));
+  retract(L1A, L1B, L1E, LEVEL_SPEED);
+  retract(L2A, L2B, L2E, LEVEL_SPEED);
+  retract(L3A, L3B, L3E, LEVEL_SPEED);
+  retract(L4A, L4B, L4E, LEVEL_SPEED);
+  retract(L5A, L5B, L5E, LEVEL_SPEED);
+  retract(L6A, L6B, L6E, LEVEL_SPEED);
+}
+
+
+
+void tiltPlatformXPositive() {
+  Serial.println(F("Tilting Platform - X positive"));
+  extend(L1A, L1B, L1E, 255);
+  extend(L2A, L2B, L2E, 50);
+  retract(L3A, L3B, L3E, 220);
+  retract(L4A, L4B, L4E, 220);
+  extend(L5A, L5B, L5E, 50);
+  extend(L6A, L6B, L6E, 255);
+  delay(100);
+}
+
+
+void tiltPlatformXNegetive() {
+  Serial.println(F("Tilting Platform - X negetive"));
+  retract(L1A, L1B, L1E, 255);
+  retract(L2A, L2B, L2E, 50);
+  extend(L3A, L3B, L3E, 220);
+  extend(L4A, L4B, L4E, 220);
+  retract(L5A, L5B, L5E, 50);
+  retract(L6A, L6B, L6E, 255);
+  delay(100);
+}
+
+
+
+void tiltPlatformYPositive() {
+  Serial.println(F("Tilting Platform - Y Positive"));
+  retract(L1A, L1B, L1E, 60);
+  retract(L2A, L2B, L2E, 120);
+  retract(L3A, L3B, L3E, 30);
+  extend(L4A, L4B, L4E, 48);
+  extend(L5A, L5B, L5E, 255);
+  extend(L6A, L6B, L6E, 100);
+  delay(100);
+}
+
+
+
+void tiltPlatformYNegetive() {
+  Serial.println(F("Tilting Platform - Y Negetive"));
+  extend(L1A, L1B, L1E, 60);
+  extend(L2A, L2B, L2E, 120);
+  extend(L3A, L3B, L3E, 30);
+  retract(L4A, L4B, L4E, 48);
+  retract(L5A, L5B, L5E, 255);
+  retract(L6A, L6B, L6E, 100);
+  delay(100);
+
+}
