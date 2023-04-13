@@ -1,0 +1,544 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+
+#define L1PWM 18
+#define R1PWM 19
+#define L2PWM 23
+#define R2PWM 5
+#define L3PWM 17
+#define R3PWM 16
+#define L4PWM 4
+#define R4PWM 2
+#define L5PWM 33
+#define R5PWM 25
+#define L6PWM 26
+#define R6PWM 3
+
+#define L1E 14
+#define L2E 12
+#define L3E 13
+#define L4E 15
+#define L5E 32
+#define L6E 27
+
+#define PWM_RES 8
+#define PWM_FREQ 500
+
+#define INIT_SPEED 255
+#define LEVEL_SPEED 255
+
+Adafruit_MPU6050 mpu;
+
+const char* ssid = "stewart-demo";
+const char* password = "stewart1234";
+const char* mqtt_server = "broker.hivemq.com";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+unsigned long lastMsg = 0;
+char msg[400];
+
+int automaticOp = 0;
+
+void IRAM_ATTR eStopRoutine() {
+
+  eStopPlatform();
+}
+
+void setup() {
+  pinSet();
+  //attachInterrupt(eStop, eStopRoutine, FALLING);
+  // Serial.begin(115200);
+  Wire.begin();
+  mpu.begin();
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  lastMsg = millis();
+  connectWiFi();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
+
+  calibratePlatform();
+
+}
+
+void loop() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  Serial.print("Acceleration (m/s^2): ");
+  Serial.print(a.acceleration.x);
+  Serial.print(", ");
+  Serial.print(a.acceleration.y);
+  Serial.print(", ");
+  Serial.print(a.acceleration.z);
+  Serial.println();
+
+  /* if(a.acceleration.x > 2.5){
+     tiltPlatformXFrom15();
+    tiltPlatformX15();
+    } else if(a.acceleration.x < -2.5){
+    tiltPlatformX15();
+    tiltPlatformXFrom15();
+    } else if(a.acceleration.y > 2.5){
+    tiltPlatformYFrom15();
+    tiltPlatformY15();
+    } else if(a.acceleration.y < -2.5){
+    tiltPlatformY15();
+    tiltPlatformYFrom15();
+    }*/
+    String acLog = "x : " + String(a.acceleration.x) +" y : " + String(a.acceleration.y);
+  publishLog(String(acLog));
+
+  if (abs(a.acceleration.x) < 12 && abs(a.acceleration.y) < 12) {
+    if (abs(a.acceleration.x) > abs(a.acceleration.y)) {
+      if ( a.acceleration.x > 0.5 && automaticOp == 1) {
+        tiltPlatformXNegetive();
+      } else if (a.acceleration.x < -0.5 && automaticOp == 1) {
+        tiltPlatformXPositive();
+      } else if (automaticOp == 1) {
+        eStopPlatform();
+      }
+    }
+
+    if (abs(a.acceleration.y) > abs(a.acceleration.x)) {
+      if (a.acceleration.y > 0.5 && automaticOp == 1) {
+        tiltPlatformYNegetive();
+      } else if (a.acceleration.y < -0.5 && automaticOp == 1) {
+        tiltPlatformYPositive();
+      } else if (automaticOp == 1) {
+        eStopPlatform();
+      }
+    }
+  } else if(automaticOp == 1){
+    eStopPlatform();
+  }
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+}
+
+void connectWiFi() {
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    if(millis() - lastMsg > 15000){
+      automaticOp = 1;
+      break;
+    }
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+
+  // Servo angle up
+  if ((char)payload[0] == '1') {
+    calibratePlatform();
+  }
+
+  if ((char)payload[1] == '1') {
+    stopPlatform();
+  }
+  if ((char)payload[2] == '1') {
+    raisePlatform();
+  }
+
+  if ((char)payload[3] == '1') {
+    lowerPlatform();
+  }
+
+  if ((char)payload[4] == '1') {
+    tiltPlatformX15();
+  }
+
+  if ((char)payload[5] == '1') {
+    tiltPlatformXFrom15();
+  }
+
+  if ((char)payload[6] == '1') {
+    tiltPlatformY15();
+  }
+
+  if ((char)payload[7] == '1') {
+    tiltPlatformYFrom15();
+  }
+
+  if ((char)payload[8] == '1') {
+    tiltPlatformXPositive();
+  }
+
+  if ((char)payload[9] == '1') {
+    tiltPlatformXNegetive();
+  }
+
+  if ((char)payload[10] == '1') {
+    tiltPlatformYPositive();
+  }
+
+  if ((char)payload[11] == '1') {
+    tiltPlatformYNegetive();
+  }
+
+  if ((char)payload[12] == '1') {
+    automaticOp = 1;
+  } else
+  {
+    automaticOp = 0;
+  }
+
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      client.subscribe("stewart-verdant-control");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void pinSet() {
+  pinMode(L1PWM, OUTPUT);
+  pinMode(R1PWM, OUTPUT);
+  pinMode(L2PWM, OUTPUT);
+  pinMode(R2PWM, OUTPUT);
+  pinMode(L3PWM, OUTPUT);
+  pinMode(R3PWM, OUTPUT);
+  pinMode(L4PWM, OUTPUT);
+  pinMode(R4PWM, OUTPUT);
+  pinMode(L5PWM, OUTPUT);
+  pinMode(R5PWM, OUTPUT);
+  pinMode(L6PWM, OUTPUT);
+  pinMode(R6PWM, OUTPUT);
+  ledcAttachPin(L1E, 0);
+  ledcSetup(0, PWM_FREQ, PWM_RES);
+  ledcAttachPin(L2E, 1);
+  ledcSetup(1, PWM_FREQ, PWM_RES);
+  ledcAttachPin(L3E, 2);
+  ledcSetup(2, PWM_FREQ, PWM_RES);
+  ledcAttachPin(L4E, 3);
+  ledcSetup(3, PWM_FREQ, PWM_RES);
+  ledcAttachPin(L5E, 4);
+  ledcSetup(4, PWM_FREQ, PWM_RES);
+  ledcAttachPin(L6E, 5);
+  ledcSetup(5, PWM_FREQ, PWM_RES);
+
+}
+
+void extend(int pinA, int pinB, int ch, int duty) {
+  digitalWrite(pinA, HIGH);
+  digitalWrite(pinB, LOW);
+  ledcWrite(ch, duty);
+}
+
+void retract(int pinA, int pinB, int ch, int duty) {
+  digitalWrite(pinA, LOW);
+  digitalWrite(pinB, HIGH);
+  ledcWrite(ch, duty);
+}
+void halt(int pinA, int pinB) {
+  digitalWrite(pinA, LOW);
+  digitalWrite(pinB, LOW);
+}
+
+void calibratePlatform() {
+  Serial.println(F("Calibrating Platform - Retracting"));
+  publishLog("Calibrating Platform - Retracting");
+  retract(L1PWM, R1PWM, 0, INIT_SPEED);
+  retract(L2PWM, R2PWM, 1, INIT_SPEED);
+  retract(L3PWM, R3PWM, 2, INIT_SPEED);
+  retract(L4PWM, R4PWM, 3, INIT_SPEED);
+  retract(L5PWM, R5PWM, 4, INIT_SPEED);
+  retract(L6PWM, R6PWM, 5, INIT_SPEED);
+  delay(15000);
+   extend(L1PWM, R1PWM, 0, LEVEL_SPEED);
+  extend(L2PWM, R2PWM, 1, LEVEL_SPEED);
+  extend(L3PWM, R3PWM, 2, LEVEL_SPEED);
+  extend(L4PWM, R4PWM, 3, LEVEL_SPEED);
+  extend(L5PWM, R5PWM, 4, LEVEL_SPEED);
+  extend(L6PWM, R6PWM, 5, LEVEL_SPEED);
+  delay(10000);
+ 
+}
+
+void stopPlatform() {
+  halt(L1PWM, R1PWM);
+  halt(L2PWM, R2PWM);
+  halt(L3PWM, R3PWM);
+  halt(L4PWM, R4PWM);
+  halt(L5PWM, R5PWM);
+  halt(L6PWM, R6PWM);
+  Serial.println(F("Stoppping Platform - HALT"));
+  publishLog("Stoppping Platform - HALT");
+}
+
+void eStopPlatform() {
+  halt(L1PWM, R1PWM);
+  halt(L2PWM, R2PWM);
+  halt(L3PWM, R3PWM);
+  halt(L4PWM, R4PWM);
+  halt(L5PWM, R5PWM);
+  halt(L6PWM, R6PWM);
+}
+
+void raisePlatform() {
+  Serial.println(F("Raising Platform - LEVEL"));
+  publishLog("Raising Platform - LEVEL");
+  extend(L1PWM, R1PWM, 0, LEVEL_SPEED);
+  extend(L2PWM, R2PWM, 1, LEVEL_SPEED);
+  extend(L3PWM, R3PWM, 2, LEVEL_SPEED);
+  extend(L4PWM, R4PWM, 3, LEVEL_SPEED);
+  extend(L5PWM, R5PWM, 4, LEVEL_SPEED);
+  extend(L6PWM, R6PWM, 5, LEVEL_SPEED);
+}
+void lowerPlatform() {
+  Serial.println(F("LOWERING platform - LEVEL"));
+  publishLog("LOWERING platform - LEVEL");
+  retract(L1PWM, R1PWM, 0, LEVEL_SPEED);
+  retract(L2PWM, R2PWM, 1, LEVEL_SPEED);
+  retract(L3PWM, R3PWM, 2, LEVEL_SPEED);
+  retract(L4PWM, R4PWM, 3, LEVEL_SPEED);
+  retract(L5PWM, R5PWM, 4, LEVEL_SPEED);
+  retract(L6PWM, R6PWM, 5, LEVEL_SPEED);
+}
+
+void tiltPlatformX15() {
+  Serial.println(F("Tilting Platform - X 15 degree"));
+  publishLog("Tilting Platform - 15 degree");
+  extend(L1PWM, R1PWM, 0, 255);
+  extend(L2PWM, R2PWM, 1, 50);
+  retract(L3PWM, R3PWM, 2, 220);
+  retract(L4PWM, R4PWM, 3, 220);
+  extend(L5PWM, R5PWM, 4, 50);
+  extend(L6PWM, R6PWM, 5, 255);
+  delay(4600);
+  stopPlatform();
+
+}
+
+void tiltPlatformXPositive() {
+  Serial.println(F("Tilting Platform - X positive"));
+  extend(L1PWM, R1PWM, 0, 255);
+  extend(L2PWM, R2PWM, 1, 60);
+  retract(L3PWM, R3PWM, 2, 235);
+  retract(L4PWM, R4PWM, 3, 235);
+  extend(L5PWM, R5PWM, 4, 60);
+  extend(L6PWM, R6PWM, 5, 255);
+  //  delay(100);
+  //  stopPlatform();
+
+}
+
+void tiltPlatformXFrom15() {
+  Serial.println(F("Tilting back Platform - LEVEL"));
+  publishLog("Tilting back Platform - LEVEL");
+  retract(L1PWM, R1PWM, 0, 255);
+  retract(L2PWM, R2PWM, 1, 60);
+  extend(L3PWM, R3PWM, 2, 235);
+  extend(L4PWM, R4PWM, 3, 235);
+  retract(L5PWM, R5PWM, 4, 60);
+  retract(L6PWM, R6PWM, 5, 235);
+  delay(4600);
+  eStopPlatform();
+
+}
+
+void tiltPlatformXNegetive() {
+  Serial.println(F("Tilting Platform - X negetive"));
+  retract(L1PWM, R1PWM, 0, 255);
+  retract(L2PWM, R2PWM, 1, 60);
+  extend(L3PWM, R3PWM, 2, 235);
+  extend(L4PWM, R4PWM, 3, 235);
+  retract(L5PWM, R5PWM, 4, 60);
+  retract(L6PWM, R6PWM, 5, 235);
+  //  delay(100);
+  //  eStopPlatform();
+
+}
+
+void tiltPlatformY15() {
+  Serial.println(F("Tilting Platform - Y 15 degree"));
+  publishLog("Tilting Platform - Y 15 degree");
+  retract(L1PWM, R1PWM, 0, 60);
+  retract(L2PWM, R2PWM, 1, 120);
+  retract(L3PWM, R3PWM, 2, 30);
+  extend(L4PWM, R4PWM, 3, 48);
+  extend(L5PWM, R5PWM, 4, 255);
+  extend(L6PWM, R6PWM, 5, 100);
+  delay(6700);
+  stopPlatform();
+
+}
+
+void tiltPlatformYPositive() {
+  Serial.println(F("Tilting Platform - Y Positive"));
+  retract(L1PWM, R1PWM, 0, 60);
+  retract(L2PWM, R2PWM, 1, 120);
+  retract(L3PWM, R3PWM, 2, 30);
+  extend(L4PWM, R4PWM, 3, 48);
+  extend(L5PWM, R5PWM, 4, 255);
+  extend(L6PWM, R6PWM, 5, 100);
+  //  delay(100);
+  //  stopPlatform();
+
+}
+
+void tiltPlatformYFrom15() {
+  Serial.println(F("Tilting Platform - Y 15 degree"));
+  publishLog("Tilting Platform - Y 15 degree");
+  extend(L1PWM, R1PWM, 0, 60);
+  extend(L2PWM, R2PWM, 1, 120);
+  extend(L3PWM, R3PWM, 2, 30);
+  retract(L4PWM, R4PWM, 3, 48);
+  retract(L5PWM, R5PWM, 4, 255);
+  retract(L6PWM, R6PWM, 5, 100);
+  delay(6700);
+  eStopPlatform();
+
+}
+
+void tiltPlatformYNegetive() {
+  Serial.println(F("Tilting Platform - Y Negetive"));
+  extend(L1PWM, R1PWM, 0, 60);
+  extend(L2PWM, R2PWM, 1, 120);
+  extend(L3PWM, R3PWM, 2, 30);
+  retract(L4PWM, R4PWM, 3, 48);
+  retract(L5PWM, R5PWM, 4, 255);
+  retract(L6PWM, R6PWM, 5, 100);
+  //  delay(100);
+  //  eStopPlatform();
+
+}
+
+void tiltPlatformX15TimeBased() {
+  Serial.println(F("Tilting Platform - 15 degree"));
+  publishLog("Tilting Platform - 15 degree");
+  extend(L1PWM, R1PWM, 0, 255);
+  extend(L6PWM, R6PWM, 5, 255);
+  delay(200);
+  retract(L3PWM, R3PWM, 2, 255);
+  retract(L4PWM, R4PWM, 3, 255);
+  delay(2500);
+  extend(L2PWM, R2PWM, 1, 255);
+  extend(L5PWM, R5PWM, 4, 255);
+  delay(1900);
+  stopPlatform();
+}
+
+void L1extend() {
+  extend(L1PWM, R1PWM, 0, 255);
+  delay(100);
+  halt(L1PWM, R1PWM);
+}
+
+void L1retract() {
+  retract(L1PWM, R1PWM, 0, 255);
+  delay(100);
+  halt(L1PWM, R1PWM);
+}
+
+void L2extend() {
+  extend(L2PWM, R2PWM, 1, 255);
+  delay(100);
+  halt(L2PWM, R2PWM);
+}
+
+void L2retract() {
+  retract(L2PWM, R2PWM, 1, 255);
+  delay(100);
+  halt(L2PWM, R2PWM);
+}
+
+void L3extend() {
+  extend(L3PWM, R3PWM, 2, 255);
+  delay(100);
+  halt(L3PWM, R3PWM);
+}
+
+void L3retract() {
+  retract(L3PWM, R3PWM, 2, 255);
+  delay(100);
+  halt(L3PWM, R3PWM);
+}
+
+void L4extend() {
+  extend(L4PWM, R4PWM, 3, 255);
+  delay(100);
+  halt(L4PWM, R4PWM);
+}
+
+void L4retract() {
+  retract(L4PWM, R4PWM, 3, 255);
+  delay(100);
+  halt(L4PWM, R4PWM);
+}
+
+void L5extend() {
+  extend(L5PWM, R5PWM, 4, 255);
+  delay(100);
+  halt(L5PWM, R5PWM);
+}
+
+void L5retract() {
+  retract(L5PWM, R5PWM, 4, 255);
+  delay(100);
+  halt(L5PWM, R5PWM);
+}
+
+void L6extend() {
+  extend(L6PWM, R6PWM, 5, 255);
+  delay(100);
+  halt(L6PWM, R6PWM);
+}
+
+void L6retract() {
+  retract(L6PWM, R6PWM, 5, 255);
+  delay(100);
+  halt(L6PWM, R6PWM);
+}
+
+void publishLog(String message) {
+
+  ("[{\"name\":\"Message\",\"data\":\"" + message + "\"}]").toCharArray(msg, 400);
+  Serial.print("Publish message: ");
+  Serial.println("[{\"name\":\"Message\",\"data\":\"" + message + "\"}]");
+  client.publish("stewart-verdant-data-logs", msg);
+}
